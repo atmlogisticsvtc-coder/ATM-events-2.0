@@ -6,9 +6,7 @@ import sys
 import io
 from datetime import datetime, timezone
 
-
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
-
 
 API_URL = "https://api.truckersmp.com/v2/vtc/49940/events/attending"
 WEBHOOK_URL = os.environ["DISCORD_WEBHOOK_URL"]
@@ -18,7 +16,6 @@ START_TIME = time.time()
 
 
 def should_restart():
-    """Check if 24 hours have passed since start."""
     return (time.time() - START_TIME) >= 86400
 
 
@@ -36,27 +33,37 @@ def save_db(data):
 
 
 def fetch_events():
-    response = requests.get(API_URL)
+    try:
+        response = requests.get(API_URL, timeout=15)
+    except requests.RequestException as e:
+        print(f"[DEBUG] API request failed: {e}", flush=True)
+        return {}
+
     print(f"[DEBUG] API status: {response.status_code}", flush=True)
-    if response.status_code == 200:
-        data = response.json()
-        print(f"[DEBUG] API response keys: {list(data.keys())}", flush=True)
-        if not data["error"] and data["response"]:
-            print(f"[DEBUG] Got {len(data['response'])} events", flush=True)
-            return {str(ev["id"]): ev for ev in data["response"]}
-        else:
-            print("[DEBUG] API returned no events", flush=True)
-    else:
+
+    if response.status_code != 200:
         print(f"[DEBUG] API error: {response.text}", flush=True)
+        return {}
+
+    try:
+        data = response.json()
+    except ValueError:
+        print("[DEBUG] API response was not valid JSON", flush=True)
+        return {}
+
+    print(f"[DEBUG] API response keys: {list(data.keys())}", flush=True)
+
+    if not data.get("error") and data.get("response"):
+        print(f"[DEBUG] Got {len(data['response'])} events", flush=True)
+        return {str(ev["id"]): ev for ev in data["response"]}
+
+    print("[DEBUG] API returned no events", flush=True)
     return {}
 
 
 def discord_timestamp(dt_str, style="F"):
-    """Convert 'YYYY-MM-DD HH:MM:SS' to Discord timestamp <t:unix:style>"""
     try:
-        dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S").replace(
-            tzinfo=timezone.utc
-        )
+        dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
         unix_ts = int(dt.timestamp())
         return f"<t:{unix_ts}:{style}>"
     except Exception:
@@ -103,11 +110,7 @@ def build_embed(event, change_type="created", diffs=None):
                 ),
                 "fields": [
                     {"name": "📅 Date", "value": f"{event_date}", "inline": False},
-                    {
-                        "name": "🕒 Meetup Time",
-                        "value": f"{meetup_time}",
-                        "inline": True,
-                    },
+                    {"name": "🕒 Meetup Time", "value": f"{meetup_time}", "inline": True},
                     {
                         "name": "🚦 Departure Time",
                         "value": f"{departure_time}",
@@ -118,27 +121,28 @@ def build_embed(event, change_type="created", diffs=None):
                         "value": f"**{event['server']['name']}**",
                         "inline": False,
                     },
-                    {"name": "🚩 Start Location", "value": start_location, "inline": False},
+                    {
+                        "name": "🚩 Start Location",
+                        "value": start_location,
+                        "inline": False,
+                    },
                     {"name": "🏁 End Location", "value": end_location, "inline": False},
                 ],
                 "image": {"url": event.get("map", "")},
                 "thumbnail": {"url": event.get("banner", "")},
-                "footer": {
-                    "text": f"Event ID: {event['id']} | TruckersMP API"
-                },
+                "footer": {"text": f"Event ID: {event['id']} | TruckersMP API"},
                 "timestamp": datetime.utcnow().isoformat(),
             }
         ],
     }
 
-    
     if change_type == "updated" and diffs:
         diff_lines = []
         for field, (old, new) in diffs.items():
             if field == "Description":
                 diff_lines.append("📝 **Description changed**")
             else:
-                diff_lines.append(f"**{field}:** `{old}` → `{new}`")
+                diff_lines.append(f"**{field}:** `{old}` -> `{new}`")
 
         diff_text = "\n".join(diff_lines)
         embed["embeds"][0]["fields"].append(
@@ -150,7 +154,13 @@ def build_embed(event, change_type="created", diffs=None):
 
 def send_to_discord(event, change_type, diffs=None):
     embed = build_embed(event, change_type, diffs)
-    result = requests.post(WEBHOOK_URL, json=embed)
+
+    try:
+        result = requests.post(WEBHOOK_URL, json=embed, timeout=15)
+    except requests.RequestException as e:
+        print(f"Failed to send event: {e}", flush=True)
+        return
+
     if result.status_code in (200, 204):
         print(f"Sent {change_type} event: {event['name']}", flush=True)
     else:
@@ -176,7 +186,6 @@ def detect_changes(old_db, new_db):
 
 
 def compare_events(old_event, new_event):
-    """Compare important fields and return dict of differences"""
     fields_to_check = {
         "name": "Name",
         "start_at": "Start Time",
@@ -186,7 +195,7 @@ def compare_events(old_event, new_event):
         "banner": "Banner",
         "departure": "Start Location",
         "arrive": "End Location",
-        "description": "Description",  
+        "description": "Description",
     }
 
     diffs = {}
@@ -212,14 +221,13 @@ def compare_events(old_event, new_event):
 
         if key == "description":
             if old_val != new_val:
-                
                 print(
                     f"[LOG] Event {new_event['id']} ({new_event['name']}) description changed:\n"
                     f"OLD: {old_val}\n"
                     f"NEW: {new_val}\n",
                     flush=True,
                 )
-                diffs[label] = (old_val, new_val) 
+                diffs[label] = (old_val, new_val)
             continue
 
         if old_val != new_val:
@@ -233,11 +241,13 @@ def main():
 
     old_db = load_db()
     new_db = fetch_events()
-    print(f"[DEBUG] Loaded {len(old_db)} old events, {len(new_db)} new events", flush=True)
+    print(
+        f"[DEBUG] Loaded {len(old_db)} old events, {len(new_db)} new events", flush=True
+    )
 
     if not old_db:
         print("No database found. Creating baseline...", flush=True)
-        save_db(new_db)  
+        save_db(new_db)
     else:
         changes = detect_changes(old_db, new_db)
         for change_type, event, diffs in changes:
@@ -247,8 +257,11 @@ def main():
 
     try:
         while True:
-            time.sleep(10)  
-            print(f"[{datetime.now(timezone.utc).isoformat()}] Checking for updates...", flush=True)
+            time.sleep(10)
+            print(
+                f"[{datetime.now(timezone.utc).isoformat()}] Checking for updates...",
+                flush=True,
+            )
 
             old_db = load_db()
             new_db = fetch_events()
@@ -263,7 +276,7 @@ def main():
 
             if should_restart():
                 print("24 hours passed. Restarting bot...", flush=True)
-                os.execv(sys.executable, ["python"] + sys.argv)
+                os.execv(sys.executable, [sys.executable] + sys.argv)
 
     except KeyboardInterrupt:
         print("\n[INFO] Bot stopped by user. Exiting cleanly.", flush=True)
