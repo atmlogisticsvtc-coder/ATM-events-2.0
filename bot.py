@@ -11,7 +11,7 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 
 
 API_URL = "https://api.truckersmp.com/v2/vtc/49940/events/attending"
-WEBHOOK_URL = os.environ["https://discord.com/api/webhooks/1411836074501603449/50hOCbI8osxXnif2qaqm80MNozqNUx6IarRMau2sskXDfGSG0CV7y18VJ-087Z1XXoLu"]
+WEBHOOK_URL = os.environ["DISCORD_WEBHOOK_URL"]
 
 DB_FILE = "events_db.json"
 START_TIME = time.time()
