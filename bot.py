@@ -257,7 +257,7 @@ def main():
 
     try:
         while True:
-            time.sleep(10)
+            time.sleep(300)
             print(
                 f"[{datetime.now(timezone.utc).isoformat()}] Checking for updates...",
                 flush=True,
