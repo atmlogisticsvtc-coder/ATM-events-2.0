@@ -11,7 +11,10 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 API_URL = "https://api.truckersmp.com/v2/vtc/49940/events/attending"
 WEBHOOK_URL = os.environ["DISCORD_WEBHOOK_URL"]
 
-DB_FILE = "events_db.json"
+UPSTASH_URL = os.environ["UPSTASH_REDIS_REST_URL"].rstrip("/")
+UPSTASH_TOKEN = os.environ["UPSTASH_REDIS_REST_TOKEN"]
+REDIS_KEY = "events_db_v1"
+
 START_TIME = time.time()
 
 
@@ -21,15 +24,39 @@ def should_restart():
 
 def load_db():
     try:
-        with open(DB_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
+        r = requests.get(
+            f"{UPSTASH_URL}/get/{REDIS_KEY}",
+            headers={"Authorization": f"Bearer {UPSTASH_TOKEN}"},
+            timeout=15,
+        )
+        if r.status_code != 200:
+            print(f"[DEBUG] Upstash GET failed: {r.status_code} {r.text}", flush=True)
+            return {}
+
+        payload = r.json()
+        val = payload.get("result")
+        if not val:
+            return {}
+
+        return json.loads(val)
+    except Exception as e:
+        print(f"[DEBUG] Upstash load_db error: {e}", flush=True)
         return {}
 
 
 def save_db(data):
-    with open(DB_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
+    try:
+        body = json.dumps(data, ensure_ascii=False)
+        r = requests.post(
+            f"{UPSTASH_URL}/set/{REDIS_KEY}",
+            headers={"Authorization": f"Bearer {UPSTASH_TOKEN}"},
+            json=body,
+            timeout=15,
+        )
+        if r.status_code != 200:
+            print(f"[DEBUG] Upstash SET failed: {r.status_code} {r.text}", flush=True)
+    except Exception as e:
+        print(f"[DEBUG] Upstash save_db error: {e}", flush=True)
 
 
 def fetch_events():
